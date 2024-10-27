@@ -9,7 +9,16 @@ Foundry consists of:
 -   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
 -   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
 
-## Documentation
+## Installation
+
+> Solidity rlp
+
+```bash
+forge install https://github.com/hamdiallam/solidity-rlp@v2.0.8
+# forge install [repo link]@[tag]
+```
+
+<!-- ## Documentation
 
 https://book.getfoundry.sh/
 
@@ -63,4 +72,4 @@ $ cast <subcommand>
 $ forge --help
 $ anvil --help
 $ cast --help
-```
+``` -->
