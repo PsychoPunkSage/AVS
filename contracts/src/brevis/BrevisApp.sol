@@ -36,7 +36,5 @@ abstract contract BrevisApp {
         bytes32 _requestId,
         bytes32 _vkHash,
         bytes calldata _appCircuitOutput
-    ) internal virtual {
-        // to be overrided by custom app
-    }
+    ) internal virtual {}
 }
