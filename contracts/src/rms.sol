@@ -5,6 +5,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
+import "./brevis/BrevisApp.sol";
+
 /**
  * @title RiskManagementSystem
  * @dev Enhanced risk management system for DeFi lending with advanced trust scoring
