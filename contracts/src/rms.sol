@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title RiskManagementSystem
  * @dev Enhanced risk management system for DeFi lending with advanced trust scoring
- * @author [Your Name]
+ * @author PsychoPunkSage
  */
 contract RiskManagementSystem is ReentrancyGuard, Pausable, AccessControl {
     bytes32 public constant RISK_MANAGER_ROLE = keccak256("RISK_MANAGER_ROLE");
@@ -127,9 +127,9 @@ contract RiskManagementSystem is ReentrancyGuard, Pausable, AccessControl {
     }
 
     constructor() {
-        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _setupRole(RISK_MANAGER_ROLE, msg.sender);
-        _setupRole(ADMIN_ROLE, msg.sender);
+        grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        grantRole(RISK_MANAGER_ROLE, msg.sender);
+        grantRole(ADMIN_ROLE, msg.sender);
         platformFeePercentage = 1; // 1% platform fee
     }
 
@@ -163,7 +163,8 @@ contract RiskManagementSystem is ReentrancyGuard, Pausable, AccessControl {
 
         UserProfile storage profile = users[_borrower];
         require(
-            calculateUserRiskLevel(_borrower) != "High",
+            keccak256(abi.encode(calculateUserRiskLevel(_borrower))) !=
+                keccak256(abi.encode("High")),
             "User risk level too high"
         );
 
@@ -409,7 +410,10 @@ contract RiskManagementSystem is ReentrancyGuard, Pausable, AccessControl {
     /**
      * @notice Get detailed loan statistics for a user
      * @param _user The address of the user
-     * @return stats The loan statistics
+     * @return activeLoans
+     * @return completedLoans
+     * @return totalAmount
+     * @return avgRepaymentTime
      */
     function getUserLoanStats(
         address _user
