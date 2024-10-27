@@ -12,7 +12,12 @@ import "./brevis/BrevisApp.sol";
  * @dev Enhanced risk management system for DeFi lending with advanced trust scoring
  * @author PsychoPunkSage
  */
-contract RiskManagementSystem is ReentrancyGuard, Pausable, AccessControl {
+contract RiskManagementSystem is
+    ReentrancyGuard,
+    Pausable,
+    AccessControl,
+    BrevisApp
+{
     bytes32 public constant RISK_MANAGER_ROLE = keccak256("RISK_MANAGER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
@@ -128,7 +133,7 @@ contract RiskManagementSystem is ReentrancyGuard, Pausable, AccessControl {
         _;
     }
 
-    constructor() {
+    constructor(address brevisProof) BrevisApp(IBrevisProof(brevisProof)) {
         grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         grantRole(RISK_MANAGER_ROLE, msg.sender);
         grantRole(ADMIN_ROLE, msg.sender);
