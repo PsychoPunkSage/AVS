@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import "./brevis/BrevisApp.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
-
-import "./brevis/BrevisApp.sol";
 
 /**
  * @title RiskManagementSystem
@@ -21,29 +20,32 @@ contract RiskManagementSystem is
     bytes32 public constant RISK_MANAGER_ROLE = keccak256("RISK_MANAGER_ROLE");
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
+    /////////////
+    // STRUCTS //
+    /////////////
     struct Loan {
         uint256 loanId;
-        address borrower;
         uint256 amount;
+        uint256 dueDate;
+        address borrower;
+        LoanStatus status;
         uint256 collateral;
         uint256 interestRate;
-        uint256 dueDate;
         uint256 repaymentDate;
         uint256 latePaymentFee;
-        LoanStatus status;
         uint256 lastUpdateTimestamp;
     }
 
     struct UserProfile {
         address user;
-        uint256 totalBorrowed;
+        bool isBlacklisted;
+        uint256 trustScore;
         uint256 totalRepaid;
         uint256 defaultCount;
+        uint256 totalBorrowed;
         uint256 latePaymentCount;
-        uint256 onTimePaymentCount;
-        uint256 trustScore;
         uint256 lastLoanTimestamp;
-        bool isBlacklisted;
+        uint256 onTimePaymentCount;
         uint256 totalCollateralLocked;
     }
 
@@ -54,7 +56,9 @@ contract RiskManagementSystem is
         LIQUIDATED
     }
 
-    // Constants
+    ///////////////
+    // Constants //
+    ///////////////
     uint256 public constant BASE_TRUST_SCORE = 100;
     uint256 public constant MIN_TRUST_SCORE = 0;
     uint256 public constant MAX_TRUST_SCORE = 1000;
@@ -64,17 +68,22 @@ contract RiskManagementSystem is
     uint256 public constant MIN_LOAN_AMOUNT = 0.1 ether;
     uint256 public constant MAX_LOAN_AMOUNT = 10 ether;
 
-    // State variables
+    /////////////////////
+    // State variables //
+    /////////////////////
+    bytes32 public vkHash;
     uint256 public loanCounter;
     uint256 public totalActiveLoanValue;
     uint256 public platformFeePercentage;
 
-    mapping(address => UserProfile) public users;
     mapping(uint256 => Loan) public loans;
+    mapping(address => UserProfile) public users;
     mapping(address => uint256[]) public userLoans;
     mapping(address => uint256) public userCollateralBalance;
 
-    // Events
+    ////////////
+    // Events //
+    ////////////
     event LoanIssued(
         uint256 indexed loanId,
         address indexed borrower,
@@ -115,7 +124,9 @@ contract RiskManagementSystem is
     event UserBlacklisted(address indexed user, string reason);
     event LoanLiquidated(uint256 indexed loanId, address indexed borrower);
 
-    // Modifiers
+    ///////////////
+    // Modifiers //
+    ///////////////
     modifier onlyValidUser(address _user) {
         require(_user != address(0), "Invalid user address");
         require(!users[_user].isBlacklisted, "User is blacklisted");
@@ -133,11 +144,155 @@ contract RiskManagementSystem is
         _;
     }
 
+    /////////////////
+    // Constructor //
+    /////////////////
     constructor(address brevisProof) BrevisApp(IBrevisProof(brevisProof)) {
         grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         grantRole(RISK_MANAGER_ROLE, msg.sender);
         grantRole(ADMIN_ROLE, msg.sender);
         platformFeePercentage = 1; // 1% platform fee
+    }
+
+    /**
+     * @notice Handle proof results from Brevis verification
+     * @dev Processes historical blockchain data to enhance risk assessment
+     * @param _vkHash The verification key hash
+     * @param _circuitOutput The output from the ZK circuit
+     * FOR BREVIS
+     */
+    function handleProofResult(
+        bytes32 /*_requestId */,
+        bytes32 _vkHash,
+        bytes calldata _circuitOutput
+    ) internal override {
+        require(vkHash == _vkHash, "Invalid verification key");
+
+        // Decode the circuit output containing historical lending data
+        (
+            address user,
+            uint256 historicalTransactionCount,
+            uint256 avgTransactionValue,
+            uint256 previousLoanCount,
+            uint256 defaultRate,
+            uint64 accountAge
+        ) = decodeOutput(_circuitOutput);
+
+        UserProfile storage profile = users[user];
+        uint256 oldScore = profile.trustScore;
+
+        // Calculate new trust score based on historical data
+        uint256 newTrustScore = calculateHistoricalTrustScore(
+            historicalTransactionCount,
+            avgTransactionValue,
+            previousLoanCount,
+            defaultRate,
+            accountAge
+        );
+
+        // Update user profile with historically verified data
+        profile.trustScore = newTrustScore;
+
+        emit TrustScoreUpdated(
+            user,
+            oldScore,
+            newTrustScore,
+            "Historical data verification via Brevis"
+        );
+    }
+
+    /**
+     * @notice Decode the output from the Brevis circuit
+     * @dev Extracts historical blockchain data components
+     * @param o The circuit output bytes
+     * @return user The user address
+     * @return historicalTransactionCount Number of relevant historical transactions
+     * @return avgTransactionValue Average value of historical transactions
+     * @return previousLoanCount Number of previous loans across protocols
+     * @return defaultRate Historical default rate (scaled by 1e18)
+     * @return accountAge Age of the account in blocks
+     * FOR BREVIS
+     */
+    function decodeOutput(
+        bytes calldata o
+    )
+        internal
+        pure
+        returns (
+            address user,
+            uint256 historicalTransactionCount,
+            uint256 avgTransactionValue,
+            uint256 previousLoanCount,
+            uint256 defaultRate,
+            uint64 accountAge
+        )
+    {
+        // Decode user address (20 bytes)
+        user = address(bytes20(o[0:20]));
+
+        // Decode historical transaction count (32 bytes)
+        historicalTransactionCount = uint256(bytes32(o[20:52]));
+
+        // Decode average transaction value (32 bytes)
+        avgTransactionValue = uint256(bytes32(o[52:84]));
+
+        // Decode previous loan count (32 bytes)
+        previousLoanCount = uint256(bytes32(o[84:116]));
+
+        // Decode default rate (32 bytes)
+        defaultRate = uint256(bytes32(o[116:148]));
+
+        // Decode account age (8 bytes)
+        accountAge = uint64(bytes8(o[148:156]));
+    }
+
+    /**
+     * @notice Calculate trust score based on historical blockchain data
+     * @param historicalTransactionCount Number of relevant historical transactions
+     * @param avgTransactionValue Average value of historical transactions
+     * @param previousLoanCount Number of previous loans across protocols
+     * @param defaultRate Historical default rate (scaled by 1e18)
+     * @param accountAge Age of the account in blocks
+     * @return Updated trust score based on historical data
+     */
+    function calculateHistoricalTrustScore(
+        uint256 historicalTransactionCount,
+        uint256 avgTransactionValue,
+        uint256 previousLoanCount,
+        uint256 defaultRate,
+        uint64 accountAge
+    ) internal pure returns (uint256) {
+        uint256 baseScore = 500; // Start with middle score
+
+        // Account age factor (max 100 points)
+        uint256 ageFactor = min((accountAge / 100000) * 10, 100);
+        baseScore += ageFactor;
+
+        // Transaction history factor (max 100 points)
+        uint256 txFactor = min((historicalTransactionCount / 100) * 10, 100);
+        baseScore += txFactor;
+
+        // Average transaction value factor (max 100 points)
+        uint256 valueFactor = min((avgTransactionValue / 1 ether) * 5, 100);
+        baseScore += valueFactor;
+
+        // Loan history factor (max 100 points)
+        uint256 loanFactor = min((previousLoanCount * 10), 100);
+        baseScore += loanFactor;
+
+        // Default rate penalty (up to -400 points)
+        uint256 defaultPenalty = min((defaultRate * 400) / 1e18, 400);
+        if (baseScore > defaultPenalty) {
+            baseScore -= defaultPenalty;
+        } else {
+            baseScore = MIN_TRUST_SCORE;
+        }
+
+        return min(baseScore, MAX_TRUST_SCORE);
+    }
+
+    function setVkHash(bytes32 _vkHash) external onlyRole(ADMIN_ROLE) {
+        vkHash = _vkHash;
     }
 
     /**
