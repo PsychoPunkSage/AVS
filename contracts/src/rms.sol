@@ -5,6 +5,10 @@ import "./brevis/BrevisApp.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
+import {LPNClientV1} from "lagrange-lpn-contracts/src/v1/client/LPNClientV1.sol";
+import {ILPNRegistryV1} from "lagrange-lpn-contracts/src/v1/interfaces/ILPNRegistryV1.sol";
+import {L1BlockNumber} from "lagrange-lpn-contracts/src/utils/L1Block.sol";
+import {QueryOutput} from "lagrange-lpn-contracts/src/v1/Groth16VerifierExtensions.sol";
 
 /**
  * @title RiskManagementSystem
@@ -15,6 +19,7 @@ contract RiskManagementSystem is
     ReentrancyGuard,
     Pausable,
     AccessControl,
+    LPNClientV1,
     BrevisApp
 {
     bytes32 public constant RISK_MANAGER_ROLE = keccak256("RISK_MANAGER_ROLE");
@@ -56,6 +61,14 @@ contract RiskManagementSystem is
         LIQUIDATED
     }
 
+    struct HistoricalData {
+        uint256 totalTransactions;
+        uint256 totalValue;
+        uint256 crossChainLoans;
+        uint256 crossChainDefaults;
+        uint256 accountAgeBlocks;
+    }
+
     ///////////////
     // Constants //
     ///////////////
@@ -75,6 +88,10 @@ contract RiskManagementSystem is
     uint256 public loanCounter;
     uint256 public totalActiveLoanValue;
     uint256 public platformFeePercentage;
+
+    bytes32 public constant HISTORICAL_DATA_QUERY_HASH =
+        0x1231231231231231231231231231231231231231231231231231231231231231; // -> Example:: Replace with actual query hash (later on)
+    mapping(uint256 => address) public dataRequests;
 
     mapping(uint256 => Loan) public loans;
     mapping(address => UserProfile) public users;
@@ -147,10 +164,15 @@ contract RiskManagementSystem is
     /////////////////
     // Constructor //
     /////////////////
-    constructor(address brevisProof) BrevisApp(IBrevisProof(brevisProof)) {
+    constructor(
+        address brevisProof,
+        ILPNRegistryV1 lpnRegistry_
+    ) BrevisApp(IBrevisProof(brevisProof)) {
         grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         grantRole(RISK_MANAGER_ROLE, msg.sender);
         grantRole(ADMIN_ROLE, msg.sender);
+
+        LPNClientV1._initialize(lpnRegistry_);
         platformFeePercentage = 1; // 1% platform fee
     }
 
@@ -244,6 +266,100 @@ contract RiskManagementSystem is
 
         // Decode account age (8 bytes)
         accountAge = uint64(bytes8(o[148:156]));
+    }
+
+    function requestHistoricalData(
+        address user
+    ) external onlyRole(RISK_MANAGER_ROLE) {
+        bytes32[] memory placeholders = new bytes32[](1);
+        placeholders[0] = bytes32(bytes20(user));
+
+        uint256 requestId = lpnRegistry.request{value: lpnRegistry.gasFee()}(
+            HISTORICAL_DATA_QUERY_HASH,
+            placeholders,
+            L1BlockNumber(),
+            L1BlockNumber()
+        );
+
+        dataRequests[requestId] = user;
+    }
+
+    function processCallback(
+        uint256 requestId,
+        QueryOutput memory result
+    ) internal override {
+        address user = dataRequests[requestId];
+        require(user != address(0), "Invalid request ID");
+
+        for (uint256 i = 0; i < result.rows.length; i++) {
+            HistoricalData memory data = abi.decode(
+                result.rows[i],
+                (HistoricalData)
+            );
+
+            // Update user profile with cross-chain data
+            UserProfile storage profile = users[user];
+            uint256 oldScore = profile.trustScore;
+
+            // Calculate new trust score incorporating cross-chain data
+            uint256 newTrustScore = calculateCrossChainTrustScore(
+                data.totalTransactions,
+                data.totalValue,
+                data.crossChainLoans,
+                data.crossChainDefaults,
+                data.accountAgeBlocks
+            );
+
+            profile.trustScore = newTrustScore;
+
+            emit TrustScoreUpdated(
+                user,
+                oldScore,
+                newTrustScore,
+                "Cross-chain historical data update"
+            );
+        }
+
+        delete dataRequests[requestId];
+    }
+
+    function calculateCrossChainTrustScore(
+        uint256 totalTransactions,
+        uint256 totalValue,
+        uint256 crossChainLoans,
+        uint256 crossChainDefaults,
+        uint256 accountAgeBlocks
+    ) internal pure returns (uint256) {
+        uint256 baseScore = 500; // Start with middle score
+
+        // Account age factor across chains (max 100 points)
+        uint256 ageFactor = min((accountAgeBlocks / 100000) * 10, 100);
+        baseScore += ageFactor;
+
+        // Cross-chain transaction history factor (max 100 points)
+        uint256 txFactor = min((totalTransactions / 50) * 5, 100);
+        baseScore += txFactor;
+
+        // Cross-chain value factor (max 100 points)
+        uint256 valueFactor = min((totalValue / 100 ether) * 10, 100);
+        baseScore += valueFactor;
+
+        // Cross-chain loan history factor (max 100 points)
+        uint256 loanFactor = min((crossChainLoans * 5), 100);
+        baseScore += loanFactor;
+
+        // Cross-chain default penalty (up to -400 points)
+        if (crossChainLoans > 0) {
+            uint256 defaultRate = (crossChainDefaults * 1e18) / crossChainLoans;
+            uint256 defaultPenalty = min((defaultRate * 400) / 1e18, 400);
+            if (baseScore > defaultPenalty) {
+                baseScore -= defaultPenalty;
+            } else {
+                baseScore = MIN_TRUST_SCORE;
+            }
+        }
+
+        return min(baseScore, MAX_TRUST_SCORE);
     }
 
     /**
