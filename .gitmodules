@@ -1,3 +1,6 @@
 [submodule "contracts/lib/solidity-rlp"]
 	path = contracts/lib/solidity-rlp
 	url = https://github.com/hamdiallam/solidity-rlp
+[submodule "contracts/lib/lagrange-lpn-contracts"]
+	path = contracts/lib/lagrange-lpn-contracts
+	url = https://github.com/lagrange-labs/lagrange-lpn-contracts
